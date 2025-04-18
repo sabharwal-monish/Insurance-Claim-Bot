@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+langchain
+openai
+groq
+python-dotenv
+pydantic
+transformers
+whisper
+torch
+pillow
+sqlalchemy
+pymysql
+-e .
+
