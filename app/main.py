@@ -1,12 +1,12 @@
 from fastapi import FastAPI, UploadFile, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from uuid import uuid4
 from PIL import Image
 from dotenv import load_dotenv
 import os
 from langchain_groq import ChatGroq
 from langchain.schema import SystemMessage, HumanMessage
-from app.db_helper import get_db_connection  
+from app.db_helper import get_db_connection
 
 app = FastAPI()
 
@@ -24,6 +24,22 @@ def process_image(image_path):
     image = Image.open(image_path)
     return "Car Damage Detected"
 
+# --- HTML Upload Form (GET) ---
+@app.get("/upload-image/{session_id}")
+async def upload_image_form(session_id: str):
+    return HTMLResponse(content=f"""
+        <html>
+            <body>
+                <h3>Upload Damage Photo for Session: {session_id}</h3>
+                <form action="/upload-image/{session_id}" method="post" enctype="multipart/form-data">
+                    <input type="file" name="file" accept="image/*" required><br><br>
+                    <input type="submit" value="Upload">
+                </form>
+            </body>
+        </html>
+    """, status_code=200)
+
+# --- Image Upload Handler (POST) ---
 @app.post('/upload-image/{session_id}')
 async def upload_image(session_id: str, file: UploadFile):
     try:
@@ -70,7 +86,7 @@ def chat_with_groq(message: str, session_id: str):
         missing = [field for field in REQUIRED_FIELDS if not claim_data.get(field)]
 
         messages = [
-    SystemMessage(content=f"""
+            SystemMessage(content=f"""
 You are an AI assistant helping users file vehicle insurance claims.
 
 Here is what the user has already provided:
@@ -83,9 +99,8 @@ Here is what the user has already provided:
 ONLY ask about fields that are still missing. Never repeat questions.
 Once everything is collected (except photo), say: "All details received. Please upload a photo of the damage."
 """),
-    HumanMessage(content=message)
-]
-
+            HumanMessage(content=message)
+        ]
 
         response = llm(messages).content
         return response
@@ -98,13 +113,10 @@ Once everything is collected (except photo), say: "All details received. Please 
 async def dialogflow_webhook(request: Request):
     try:
         payload = await request.json()
-        print(f"📌 Raw session string: {payload.get('session')}")
         session_id = payload.get('session', str(uuid4())).split('/')[-1]
         user_input = payload.get('queryResult', {}).get('queryText', '')
         intent = payload.get('queryResult', {}).get('intent', {}).get('displayName', '')
         parameters = payload.get('queryResult', {}).get('parameters', {})
-
-        print(f"🤖 Intent: {intent}, Parameters: {parameters}")
 
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -114,7 +126,6 @@ async def dialogflow_webhook(request: Request):
         session = cursor.fetchone()
 
         if not session:
-            # Create new session
             cursor.execute("""
                 INSERT INTO insurance_sessions (session_id) VALUES (%s)
             """, (session_id,))
@@ -166,7 +177,6 @@ async def dialogflow_webhook(request: Request):
         ))
         conn.commit()
 
-        # Check if all required text fields are filled
         all_text_filled = all(session.get(field) for field in [
             "date_time_of_incident",
             "policy_number",
@@ -175,7 +185,17 @@ async def dialogflow_webhook(request: Request):
         ])
 
         if all_text_filled and not session["photo_uploaded"]:
-            return {"fulfillmentText": "All details received. Please upload a photo of the damage to complete your claim. You can do so now."}
+            upload_link = f"http://localhost:8000/upload-image/{session_id}"
+            return {
+                "fulfillmentText": f"""
+✅ All required details have been received.
+
+Please upload a photo of the damage to complete your claim.
+
+Click here to upload: {upload_link}
+(If the link isn't clickable, please copy and paste it into your browser.)
+"""
+            }
 
         if all_text_filled and session["photo_uploaded"]:
             summary = f"""
@@ -191,7 +211,6 @@ Thank you! Your claim has been successfully filed.
             conn.commit()
             return {"fulfillmentText": summary}
 
-        # Otherwise, ask for missing info
         response = chat_with_groq(user_input, session_id)
         return {"fulfillmentText": response}
 
