@@ -11,7 +11,6 @@ list_of_files = [
     f"{project_name}/main.py",
     f"{project_name}/routes.py",
     f"{project_name}/db_helper.py",
-    f"{project_name}/whisper_helper.py",
     f"{project_name}/image_processor.py",
     f"{project_name}/langchain_helper.py",
     f"{project_name}/utils.py",

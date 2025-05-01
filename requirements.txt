@@ -1,0 +1,9 @@
+# requirements.txt
+
+fastapi
+uvicorn
+mysql-connector-python
+python-dotenv
+requests
+langchain
+langchain_groq
