@@ -1,14 +1,19 @@
 from fastapi import FastAPI, UploadFile, Request
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from uuid import uuid4
 from PIL import Image
 from dotenv import load_dotenv
 import os
+from pathlib import Path
 from langchain_groq import ChatGroq
 from langchain.schema import SystemMessage, HumanMessage
 from app.db_helper import get_db_connection
 
 app = FastAPI()
+
+# Serve uploaded images from data/uploads/
+app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
 
 # --- REQUIRED FIELDS ---
 REQUIRED_FIELDS = [
@@ -39,17 +44,21 @@ async def upload_image_form(session_id: str):
         </html>
     """, status_code=200)
 
-# --- Image Upload Handler (POST) ---
+# --- Upload Handler (POST) ---
 @app.post('/upload-image/{session_id}')
 async def upload_image(session_id: str, file: UploadFile):
     try:
-        file_location = f'temp_image_{session_id}.jpg'
+        uploads_dir = Path("data/uploads")
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{session_id}_{file.filename}"
+        file_location = uploads_dir / filename
+
         with open(file_location, 'wb') as f:
             f.write(await file.read())
 
         result = process_image(file_location)
 
-        # ✅ Update photo_uploaded in the DB
+        # ✅ Update DB
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -60,7 +69,14 @@ async def upload_image(session_id: str, file: UploadFile):
         conn.commit()
         conn.close()
 
-        return {'damage': result, 'message': 'Photo uploaded successfully.'}
+        public_url = f"http://localhost:8000/uploads/{filename}"
+
+        return {
+            'damage': result,
+            'message': 'Photo uploaded successfully.',
+            'image_url': public_url
+        }
+
     except Exception as e:
         print("❌ Error in upload_image:", str(e))
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -82,8 +98,6 @@ def chat_with_groq(message: str, session_id: str):
         cursor.execute("SELECT * FROM insurance_sessions WHERE session_id = %s", (session_id,))
         claim_data = cursor.fetchone()
         conn.close()
-
-        missing = [field for field in REQUIRED_FIELDS if not claim_data.get(field)]
 
         messages = [
             SystemMessage(content=f"""
@@ -158,7 +172,7 @@ async def dialogflow_webhook(request: Request):
         elif intent == "describe_incident":
             session["incident_description"] = user_input
 
-        # Update session in DB
+        # Update DB
         cursor.execute("""
             UPDATE insurance_sessions
             SET date_time_of_incident = %s,
@@ -205,6 +219,8 @@ Click here to upload: {upload_link}
 - Vehicle Info: {session['vehicle_info']}
 - Description: {session['incident_description']}
 
+📸 Photo uploaded.
+
 Thank you! Your claim has been successfully filed.
 """
             cursor.execute("DELETE FROM insurance_sessions WHERE session_id = %s", (session_id,))
@@ -218,7 +234,7 @@ Thank you! Your claim has been successfully filed.
         print("❌ Error:", str(e))
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# --- TEST CONNECTION ---
+# --- DB TEST ---
 @app.get("/test-db")
 def test_db():
     try:
